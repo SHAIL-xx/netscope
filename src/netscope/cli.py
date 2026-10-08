@@ -1,9 +1,9 @@
-import json
 import argparse
 import copy
+import json
 import socket
 import ssl
-import sys 
+import sys
 import time
 import threading
 from urllib.parse import urlsplit
@@ -36,8 +36,10 @@ def new_stats():
         "hist_sum": 0.0,
     }
 
+
 def normalize_url(u):
     return u if "://" in u else "https://" + u
+
 
 def request(url, timeout):
     parts = urlsplit(url)
@@ -52,25 +54,21 @@ def request(url, timeout):
     timings = {}
     t_start = time.perf_counter()
 
-    # DNS
     t0 = time.perf_counter()
     ip = socket.gethostbyname(host)
     timings["dns_ms"] = (time.perf_counter() - t0) * 1000
 
-    # TCP connect
     t0 = time.perf_counter()
     s = socket.create_connection((ip, port), timeout=timeout)
     timings["connect_ms"] = (time.perf_counter() - t0) * 1000
 
     try:
-        # TLS handshake (https only)
         if scheme == "https":
             t0 = time.perf_counter()
             context = ssl.create_default_context()
             s = context.wrap_socket(s, server_hostname=host)
             timings["tls_ms"] = (time.perf_counter() - t0) * 1000
 
-        # Send request, wait for first byte
         req = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
         t0 = time.perf_counter()
         s.sendall(req.encode())
@@ -106,13 +104,15 @@ def request(url, timeout):
         "timings": timings,
     }
 
+
 def print_report(result):
     print(f"URL:         {result['url']}")
     print(f"Resolved IP: {result['ip']}")
     print(f"Status:      {result['status']}")
-    print(f"Body Size:   {result['body_size']} bytes")
+    print(f"Body size:   {result['body_size']} bytes")
+    print("Timing breakdown:")
     for key, val in result["timings"].items():
-        print(f"  {key:12s}: {val: .2f} ms")
+        print(f"  {key:12s}: {val:.2f} ms")
     if 300 <= result["status_code"] < 400:
         loc = result["headers"].get("location", "?")
         print(f"Note: this is a redirect to {loc} (netscope does not follow redirects),")
@@ -121,17 +121,18 @@ def print_report(result):
     is_http = result["url"].startswith("http://")
     for h in CHECKED_HEADERS:
         if h in result["headers"]:
-            print(f"   [OK]  {h}:  {result['headers'][h]}")
+            print(f"  [OK]   {h}: {result['headers'][h]}")
         elif h == "strict-transport-security" and is_http:
-            print(f"   [INFO] {h} only applies over HTTPS")
+            print(f"  [INFO] {h} only applies over HTTPS")
         else:
-            print(f"   [WARN] missing {h}")
+            print(f"  [WARN] missing {h}")
     if "server" in result["headers"]:
-        print(f"   [INFO] server header exposes: {result['headers']['server']}")
+        print(f"  [INFO] server header exposes: {result['headers']['server']}")
 
 
-def background_checker(target_url, interval_seconds, timeout):
-    while True:
+def background_checker(target_url, interval_seconds, timeout, stop=None):
+    stop = stop or threading.Event()
+    while not stop.is_set():
         try:
             result = request(target_url, timeout)
             t = result["timings"]
@@ -143,7 +144,6 @@ def background_checker(target_url, interval_seconds, timeout):
                 st["headers_present"] = {
                     h: (h in result["headers"]) for h in CHECKED_HEADERS
                 }
-                
                 st["last_error"] = None
                 st["last_check"] = time.time()
                 st["hist_count"] += 1
@@ -165,6 +165,7 @@ def background_checker(target_url, interval_seconds, timeout):
                 st["last_error"] = f"{type(e).__name__}: {e}"
                 st["last_check"] = time.time()
             print(f"[error] {target_url} -> {type(e).__name__}: {e}")
+        stop.wait(interval_seconds)
 
 
 def render_metrics():
@@ -216,7 +217,9 @@ def render_metrics():
 
     return "\n".join(lines) + "\n"
 
+
 def render_status():
+    """Same data as /metrics, shaped as JSON for the dashboard."""
     with stats_lock:
         snap = copy.deepcopy(stats)
 
@@ -237,9 +240,10 @@ def render_status():
             "timings": st["last_timings"],
             "headers": st["headers_present"],
             "last_error": st["last_error"],
-            "last_check": st["last_check"], 
+            "last_check": st["last_check"],
         })
     return {"generated_at": time.time(), "targets": targets}
+
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -373,6 +377,7 @@ setInterval(refresh, 3000);
 </html>
 """
 
+
 class MetricsHandler(BaseHTTPRequestHandler):
     def _send(self, status, content_type, body=b""):
         self.send_response(status)
@@ -381,10 +386,10 @@ class MetricsHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
-    
+
     def do_GET(self):
-        path = self.path.split("?",1)[0]
-        if path == "/metrices":
+        path = self.path.split("?", 1)[0]
+        if path == "/metrics":
             self._send(200, "text/plain; version=0.0.4", render_metrics().encode())
         elif path == "/api/status":
             self._send(200, "application/json", json.dumps(render_status()).encode())
@@ -392,11 +397,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", DASHBOARD_HTML.encode())
         else:
             self._send(404, "text/plain", b"not found\n")
-    
+
     def log_message(self, format, *args):
         pass
-
-
 
 
 def main():
@@ -410,7 +413,7 @@ def main():
     parser.add_argument("--interval", type=float, default=10,
                         help="seconds between checks in watch mode (default 10)")
     parser.add_argument("--port", type=int, default=8000,
-                        help="port for /metrics in watch mode (default 8000)")
+                        help="port for the dashboard and /metrics in watch mode (default 8000)")
     parser.add_argument("--timeout", type=float, default=10,
                         help="socket timeout in seconds (default 10)")
     args = parser.parse_args()
@@ -423,9 +426,6 @@ def main():
     if args.once:
         failed = False
         for url in urls:
-            print(f"Checking {len(urls)} target(s) every {args.interval:g}s")
-            print(f"Dashboard: http://localhost:{args.port}/")
-            print(f"Metrics:   http://localhost:{args.port}/metrics (Ctrl+C to stop)")
             try:
                 print_report(request(url, args.timeout))
             except Exception as e:
@@ -433,6 +433,15 @@ def main():
                 print(f"[error] {url} -> {type(e).__name__}: {e}")
             print()
         sys.exit(1 if failed else 0)
+
+    # Bind the web server FIRST, so a port problem is reported immediately
+    # instead of leaving the checkers running with no dashboard.
+    try:
+        server = HTTPServer(("127.0.0.1", args.port), MetricsHandler)
+    except OSError as e:
+        print(f"[fatal] cannot listen on 127.0.0.1:{args.port} -> {e}")
+        print("        Is another netscope still running? Try a different --port.")
+        sys.exit(1)
 
     for url in urls:
         stats[url] = new_stats()
@@ -443,11 +452,14 @@ def main():
         ).start()
 
     print(f"Checking {len(urls)} target(s) every {args.interval:g}s")
-    print(f"Metrics available at http://localhost:{args.port}/metrics (Ctrl+C to stop)")
+    print(f"Dashboard: http://127.0.0.1:{args.port}/")
+    print(f"Metrics:   http://127.0.0.1:{args.port}/metrics")
+    print("Press Ctrl+C to stop.")
     try:
-        HTTPServer(("localhost", args.port), MetricsHandler).serve_forever()
+        server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
+
 
 if __name__ == "__main__":
     main()
