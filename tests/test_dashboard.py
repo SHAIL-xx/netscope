@@ -79,9 +79,10 @@ class HttpEndpointTests(unittest.TestCase):
         self.assertIn(b"netscope_requests_total", self.get("/metrics").read())
 
     def test_unknown_path_is_404(self):
-        with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self.get("/nope")
-        self.assertEqual(ctx.exception.code, 404)
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+               self.get("/nope")
+            ctx.exception.close()
+            self.assertEqual(ctx.exception.code, 404)
 
 
 if __name__ == "__main__":

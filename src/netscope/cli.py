@@ -1,6 +1,7 @@
 import argparse
 import copy
 import json
+import os
 import socket
 import ssl
 import sys
@@ -39,6 +40,16 @@ def new_stats():
 
 def normalize_url(u):
     return u if "://" in u else "https://" + u
+
+def env_default(name, cast, fallback):
+    """Read a setting from an environment variable, or use the fallback."""
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return fallback
+    try:
+        return cast(raw)
+    except ValueError:
+        sys.exit(f"[fatal] {name}={raw!r} is not a valid {cast.__name__}")
 
 
 def request(url, timeout):
@@ -244,6 +255,10 @@ def render_status():
         })
     return {"generated_at": time.time(), "targets": targets}
 
+def is_ready():
+    """Ready once every target has been checked at least once."""
+    with stats_lock:
+        return bool(stats) and all(st["requests_total"] > 0 for st in stats.values())
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -395,6 +410,13 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self._send(200, "application/json", json.dumps(render_status()).encode())
         elif path == "/":
             self._send(200, "text/html; charset=utf-8", DASHBOARD_HTML.encode())
+        elif path == "/healthz":
+            self._send(200, "text/plain", b"ok\n")
+        elif path == "/readyz":
+            if is_ready():
+                self._send(200, "text/plain", b"ready\n")
+            else:
+                self._send(503, "text/plain", b"not ready\n")
         else:
             self._send(404, "text/plain", b"not found\n")
 
@@ -407,22 +429,35 @@ def main():
         prog="netscope",
         description="HTTP diagnostics: per-stage timings, header checks, Prometheus metrics.",
     )
-    parser.add_argument("urls", nargs="+", help="one or more URLs (https:// is assumed if omitted)")
+    parser.add_argument("urls", nargs="*",
+                        help="URLs to check (https:// is assumed if omitted); "
+                             "if none are given, NETSCOPE_TARGETS is used (comma-separated)")
     parser.add_argument("--once", action="store_true",
                         help="check each URL once, print a report, and exit")
-    parser.add_argument("--interval", type=float, default=10,
-                        help="seconds between checks in watch mode (default 10)")
-    parser.add_argument("--port", type=int, default=8000,
-                        help="port for the dashboard and /metrics in watch mode (default 8000)")
-    parser.add_argument("--timeout", type=float, default=10,
-                        help="socket timeout in seconds (default 10)")
+    parser.add_argument("--interval", type=float,
+                        default=env_default("NETSCOPE_INTERVAL", float, 10),
+                        help="seconds between checks in watch mode "
+                             "(default 10, env NETSCOPE_INTERVAL)")
+    parser.add_argument("--port", type=int,
+                        default=env_default("NETSCOPE_PORT", int, 8000),
+                        help="port for the dashboard and /metrics in watch mode "
+                             "(default 8000, env NETSCOPE_PORT)")
+    parser.add_argument("--timeout", type=float,
+                        default=env_default("NETSCOPE_TIMEOUT", float, 10),
+                        help="socket timeout in seconds (default 10, env NETSCOPE_TIMEOUT)")
+    parser.add_argument("--host", default=env_default("NETSCOPE_HOST", str, "127.0.0.1"),
+                        help="address to listen on in watch mode (default 127.0.0.1, "
+                             "env NETSCOPE_HOST; use 0.0.0.0 inside a container)")
     args = parser.parse_args()
 
     if args.interval <= 0:
         parser.error("--interval must be greater than 0")
 
-    urls = list(dict.fromkeys(normalize_url(u) for u in args.urls))
-
+    raw_urls = args.urls or os.environ.get("NETSCOPE_TARGETS", "").replace(",", " ").split()
+    if not raw_urls:
+        parser.error("no URLs given: pass them as arguments or set NETSCOPE_TARGETS")
+    urls = list(dict.fromkeys(normalize_url(u) for u in raw_urls))
+    
     if args.once:
         failed = False
         for url in urls:
@@ -437,9 +472,9 @@ def main():
     # Bind the web server FIRST, so a port problem is reported immediately
     # instead of leaving the checkers running with no dashboard.
     try:
-        server = HTTPServer(("127.0.0.1", args.port), MetricsHandler)
+        server = HTTPServer((args.host, args.port), MetricsHandler)
     except OSError as e:
-        print(f"[fatal] cannot listen on 127.0.0.1:{args.port} -> {e}")
+        print(f"[fatal] cannot listen on {args.host}:{args.port} -> {e}")
         print("        Is another netscope still running? Try a different --port.")
         sys.exit(1)
 
@@ -451,9 +486,9 @@ def main():
             daemon=True,
         ).start()
 
-    print(f"Checking {len(urls)} target(s) every {args.interval:g}s")
-    print(f"Dashboard: http://127.0.0.1:{args.port}/")
-    print(f"Metrics:   http://127.0.0.1:{args.port}/metrics")
+    shown_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
+    print(f"Dashboard: http://{shown_host}:{args.port}/")
+    print(f"Metrics:   http://{shown_host}:{args.port}/metrics")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
