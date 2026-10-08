@@ -32,6 +32,7 @@ def new_stats():
         "headers_present": {},
         "last_error": None,
         "last_check": None,
+        "cert_expiry_days": None,
         "bucket_counts": [0] * len(BUCKETS_MS),
         "hist_count": 0,
         "hist_sum": 0.0,
@@ -50,6 +51,11 @@ def env_default(name, cast, fallback):
         return cast(raw)
     except ValueError:
         sys.exit(f"[fatal] {name}={raw!r} is not a valid {cast.__name__}")
+
+def cert_days_remaining(cert, now=None):
+    """Days until the certificate's notAfter date (from ssl's getpeercert())."""
+    expires = ssl.cert_time_to_seconds(cert["notAfter"])
+    return (expires - (time.time() if now is None else now)) / 86400
 
 
 def request(url, timeout):
@@ -73,12 +79,15 @@ def request(url, timeout):
     s = socket.create_connection((ip, port), timeout=timeout)
     timings["connect_ms"] = (time.perf_counter() - t0) * 1000
 
+    cert_days = None
+
     try:
         if scheme == "https":
             t0 = time.perf_counter()
             context = ssl.create_default_context()
             s = context.wrap_socket(s, server_hostname=host)
             timings["tls_ms"] = (time.perf_counter() - t0) * 1000
+            cert_days = cert_days_remaining(s.getpeercert())
 
         req = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
         t0 = time.perf_counter()
@@ -113,6 +122,7 @@ def request(url, timeout):
         "headers": headers,
         "body_size": len(body),
         "timings": timings,
+        "cert_expiry_days": cert_days
     }
 
 
@@ -124,6 +134,8 @@ def print_report(result):
     print("Timing breakdown:")
     for key, val in result["timings"].items():
         print(f"  {key:12s}: {val:.2f} ms")
+    if result["cert_expiry_days"] is not None:
+        print(f"TLS certificate expires in {result['cert_expiry_days']: .0f} days")
     if 300 <= result["status_code"] < 400:
         loc = result["headers"].get("location", "?")
         print(f"Note: this is a redirect to {loc} (netscope does not follow redirects),")
@@ -157,6 +169,7 @@ def background_checker(target_url, interval_seconds, timeout, stop=None):
                 }
                 st["last_error"] = None
                 st["last_check"] = time.time()
+                st["cert_expiry_days"] = result["cert_expiry_days"]
                 st["hist_count"] += 1
                 st["hist_sum"] += t["total_ms"]
                 for i, limit in enumerate(BUCKETS_MS):
@@ -214,6 +227,11 @@ def render_metrics():
                 f'netscope_header_present{{url="{url}",header="{h}"}} {1 if present else 0}'
             )
 
+    header("netscope_cert_expiry_days", "gauge", "Days until the TLS certificate expires (https targets)")
+    for url, st in snap.items():
+        if st["cert_expiry_days"] is not None:
+            lines.append(f'netscope_cert_expiry_days{{url="{url}"}} {st["cert_expiry_days"]:.1f}')
+    
     header("netscope_request_duration_ms", "histogram", "Total request duration in ms")
     for url, st in snap.items():
         for limit, count in zip(BUCKETS_MS, st["bucket_counts"]):
@@ -250,6 +268,7 @@ def render_status():
             "errors_total": st["errors_total"],
             "timings": st["last_timings"],
             "headers": st["headers_present"],
+            "cert_days": st["cert_expiry_days"],
             "last_error": st["last_error"],
             "last_check": st["last_check"],
         })
@@ -268,7 +287,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <title>netscope</title>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --text:#1c2230; --muted:#6b7385; --line:#e3e6ec;
-          --ok:#1a7f4b; --okbg:#e3f5ea; --bad:#b42318; --badbg:#fde8e6; --wait:#8a6100; --waitbg:#fff3d6; }
+ --ok:#1a7f4b; --okbg:#e3f5ea; --bad:#b42318; --badbg:#fde8e6; --wait:#8a6100; --waitbg:#fff3d6; }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#12151c; --card:#1b2029; --text:#e7eaf0; --muted:#97a0b3; --line:#2a303c;
             --ok:#5fd99a; --okbg:#173326; --bad:#ff8f84; --badbg:#3a1d1a; --wait:#f2c75c; --waitbg:#37300f; }
@@ -304,7 +323,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <table>
       <thead>
         <tr><th>Site</th><th>State</th><th>HTTP</th><th>Total</th><th>Stages (ms)</th>
-            <th>Headers</th><th>Checks</th><th>Last check</th><th>Last error</th></tr>
+        <th>Headers</th><th>Cert</th><th>Checks</th><th>Last check</th><th>Last error</th></tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
@@ -331,6 +350,12 @@ function td(child, cls) {
   const cell = el("td", cls);
   if (typeof child === "string") cell.textContent = child; else if (child) cell.appendChild(child);
   return cell;
+}
+
+function certBadge(days) {
+    if (days === null || days === undefined) return "-";
+    const cls = days < 7 ? "down" : days < 30 ? "pending" : "up";
+    return el ("span", "badge " + cls, Math.floor(days) + " d");
 }
 
 function fmt(ms) { return ms === undefined ? "-" : ms.toFixed(0); }
@@ -391,7 +416,6 @@ setInterval(refresh, 3000);
 </body>
 </html>
 """
-
 
 class MetricsHandler(BaseHTTPRequestHandler):
     def _send(self, status, content_type, body=b""):
