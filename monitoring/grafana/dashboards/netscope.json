@@ -1,0 +1,133 @@
+{
+    "uid": "netscope",
+    "title": "netscope",
+    "schemaVersion": 39,
+    "version": 1,
+    "editable": true,
+    "refresh": "10s",
+    "time": { "from": "now-1h", "to": "now" },
+    "tags": ["netscope"],
+    "templating": { "list": [] },
+    "annotations": { "list": [] },
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Certificate days left",
+        "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "targets": [
+          { "refId": "A", "expr": "netscope_cert_expiry_days", "legendFormat": "{{url}}" }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "d",
+            "decimals": 0,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "red", "value": null },
+                { "color": "orange", "value": 7 },
+                { "color": "green", "value": 30 }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Failed checks, last 5 minutes",
+        "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "targets": [
+          { "refId": "A", "expr": "increase(netscope_errors_total[5m])", "legendFormat": "{{url}}" }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "none",
+            "decimals": 0,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "red", "value": 3 }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+      },
+      {
+        "id": 3,
+        "type": "bargauge",
+        "title": "Security headers present (out of 5)",
+        "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "targets": [
+          { "refId": "A", "expr": "sum by (url) (netscope_header_present)", "legendFormat": "{{url}}" }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 5,
+            "decimals": 0,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "red", "value": null },
+                { "color": "orange", "value": 3 },
+                { "color": "green", "value": 5 }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient",
+          "reduceOptions": { "calcs": ["lastNotNull"] }
+        }
+      },
+      {
+        "id": 4,
+        "type": "timeseries",
+        "title": "Total time of last check (ms)",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "targets": [
+          { "refId": "A", "expr": "netscope_stage_ms{stage=\"total\"}", "legendFormat": "{{url}}" }
+        ],
+        "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+      },
+      {
+        "id": 5,
+        "type": "timeseries",
+        "title": "DNS lookup time (ms)",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "targets": [
+          { "refId": "A", "expr": "netscope_stage_ms{stage=\"dns\"}", "legendFormat": "{{url}}" }
+        ],
+        "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+      },
+      {
+        "id": 6,
+        "type": "timeseries",
+        "title": "Slow checks (over 1 s) in the last 15 minutes",
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "increase(netscope_request_duration_ms_count[15m]) - on(url) increase(netscope_request_duration_ms_bucket{le=\"1000\"}[15m])",
+            "legendFormat": "{{url}}"
+          }
+        ],
+        "fieldConfig": { "defaults": { "unit": "none", "decimals": 1 }, "overrides": [] }
+      }
+    ]
+  }

@@ -1,0 +1,32 @@
+groups:
+  - name: netscope
+    rules:
+      - alert: SiteDown
+        expr: increase(netscope_errors_total[2m]) >= 3
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.url }} is failing its checks"
+          description: "{{ $labels.url }} had about {{ $value | humanize }} failed checks in the last 2 minutes."
+
+      - alert: CertExpiringSoon
+        expr: netscope_cert_expiry_days < 14
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate for {{ $labels.url }} expires soon"
+          description: "{{ $labels.url }} has {{ $value | humanize }} days of certificate validity left."
+
+      - alert: SlowChecks
+        expr: >
+          increase(netscope_request_duration_ms_count[15m])
+            - on(url) increase(netscope_request_duration_ms_bucket{le="1000"}[15m]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.url }} had repeated slow checks"
+          description: "About {{ $value | humanize }} checks of {{ $labels.url }} took over 1 second in the last 15 minutes."
+
+          
