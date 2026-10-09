@@ -22,7 +22,7 @@ groups:
       - alert: SlowChecks
         expr: >
           increase(netscope_request_duration_ms_count[15m])
-            - on(url) increase(netscope_request_duration_ms_bucket{le="1000"}[15m]) >= 3
+            - on(url) increase(netscope_request_duration_ms_bucket{le="1000.0"}[15m]) >= 3
         labels:
           severity: warning
         annotations:
