@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install netscope
+        run: pip install -e .
+      - name: Make sure no test is silently skipped
+        run: python scripts/check_tests_collected.py
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        run: docker build -t netscope:ci .
+      - name: Start the container (it checks its own /healthz)
+        run: |
+          docker run -d --name ns -p 127.0.0.1:8000:8000 \
+            -e NETSCOPE_TARGETS=http://127.0.0.1:8000/healthz \
+            -e NETSCOPE_INTERVAL=2 \
+            netscope:ci
+      - name: Smoke test the container
+        run: python3 scripts/smoke_test.py http://127.0.0.1:8000
+      - name: Show container logs if something failed
+        if: failure()
+        run: docker logs ns
+      - name: Stop the container
+        if: always()
+        run: docker rm -f ns
+
+  monitoring-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate docker-compose.yml
+        run: docker compose config -q
+      - name: Validate Prometheus config and alert rules
+        run: |
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.14.0 check config /etc/prometheus/prometheus.yml
+      - name: Validate the Grafana dashboard JSON
+        run: python3 -c "import json; json.load(open('monitoring/grafana/dashboards/netscope.json'))"
