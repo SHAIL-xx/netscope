@@ -16,7 +16,7 @@ spec:
       enableServiceLinks: false 
       containers:
         - name: netscope
-          image: ghcr.io/shail-xx/netscope:0.1.0
+          image: ghcr.io/shail-xx/netscope:0.1.1
           ports:
             - name: http
               containerPort: 8000
