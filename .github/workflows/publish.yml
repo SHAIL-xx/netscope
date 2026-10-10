@@ -1,0 +1,47 @@
+name: Publish image
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the image name and version
+        run: |
+          # registry image names must be lowercase, but the owner is "SHAIL-"SHAIL-xx"
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          $ tag v0.1.0 -> version 0.1.0
+          echo "VERSION=${GITHUB_REF_NAMEv}" >> "$"$GUTHUB_ENV"
+
+      - name: Build the image
+        run: docker build -t "$IMAGE:$VERSION" -t "$IMAGE:"latest" .
+
+      - name: Smoke test the image before publishing it 
+        run: |
+          docker run -d --name ns -p 127.0.0.1:8000:8000 \
+            -e NETSCOPE_TARGETS=http://127.0.0.1:8000/helathz \
+            -e NETSCOPE_INTERNAL=2 
+            "$IMAGE: $VERSION"
+          python3 scripts/smoke_test.py http://127.0.0.1:8000
+
+      - name: Show container logs if something failed
+        if: failure()
+        run: docker logs ns
+
+      - name: Log in to the Github container registry
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN}}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push the image
+        run: |
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest" 
