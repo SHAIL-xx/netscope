@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: netscope-config
+  namespace: netscope
+data:
+  NETSCOPE_TARGETS: "github.com,example.com,nonexistent.invalid"
+  NETSCOPE_INTERVAL: "10"
+  
