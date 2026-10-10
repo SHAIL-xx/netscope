@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import os
+import signal
 import socket
 import ssl
 import sys
@@ -387,7 +388,7 @@ function render(data) {
       hdrs.appendChild(b);
     }
     tr.appendChild(td(hdrs));
-
+    tr.appendChild(td(certBadge(t.cert_days)));
     tr.appendChild(td(t.requests_total + " (" + t.errors_total + " errors)", "num"));
 
     let ago = "-";
@@ -495,6 +496,10 @@ def main():
 
     # Bind the web server FIRST, so a port problem is reported immediately
     # instead of leaving the checkers running with no dashboard.
+    print("Press Ctrl+C to stop.")
+    # As PID 1 in a container, Python ignores SIGTERM unless a handler exists.
+    # Treat it like Ctrl+C so "docker stop" and Kubernetes stop us right away.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         server = HTTPServer((args.host, args.port), MetricsHandler)
     except OSError as e:
